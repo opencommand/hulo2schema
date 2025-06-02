@@ -1,0 +1,4 @@
+opencmd: "1.0.0"
+definitions:
+  IP:
+    type: str

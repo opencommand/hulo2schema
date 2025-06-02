@@ -1,0 +1,10 @@
+cmd git {
+    @conflicts("a", "interactive", "patch")
+    cmd clone {
+        a: bool
+
+        interactive: bool
+
+        patch: bool
+    }
+}
