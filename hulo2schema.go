@@ -12,79 +12,30 @@ import (
 	"github.com/antlr4-go/antlr/v4"
 	"github.com/opencommand/hulo2schema/generated"
 	"gopkg.in/yaml.v3"
+	"github.com/opencommand/schema"
 )
 
-type CommandDefinition struct {
-	Name        string              `json:"name"`
-	Comments    []string            `json:"comments,omitempty"`
-	Options     map[string]*Option  `json:"options,omitempty"`
-	SubCommands map[string]*Command `json:"sub_commands,omitempty"`
-	Constraints []*Constraint       `json:"constraints,omitempty"`
-	Extends     string              `json:"extends,omitempty"`
-}
-
-type Option struct {
-	Type        string       `json:"type"`
-	Required    bool         `json:"required,omitempty"`
-	Default     interface{}  `json:"default,omitempty"`
-	Alias       []string     `json:"alias,omitempty"`
-	Description []string     `json:"description,omitempty"`
-	Decorators  []*Decorator `json:"decorators,omitempty"`
-}
-
-type Command struct {
-	Name        string              `json:"name"`
-	Comments    []string            `json:"comments,omitempty"`
-	Options     map[string]*Option  `json:"options,omitempty"`
-	SubCommands map[string]*Command `json:"sub_commands,omitempty"`
-	Constraints []*Constraint       `json:"constraints,omitempty"`
-	Extends     string              `json:"extends,omitempty"`
-}
-
-type Decorator struct {
-	Name   string                 `json:"name"`
-	Params map[string]interface{} `json:"params,omitempty"`
-}
-
-type Constraint struct {
-	Type         string   `json:"type"`
-	Expression   string   `json:"expression"`
-	Message      string   `json:"message,omitempty"`
-	LeftOperand  *Operand `json:"left_operand"`
-	RightOperand *Operand `json:"right_operand,omitempty"`
-	Operator     string   `json:"operator,omitempty"`
-}
-
-type Operand struct {
-	Type   string      `json:"type"`
-	Path   string      `json:"path,omitempty"`
-	Value  interface{} `json:"value,omitempty"`
-	Filter *Filter     `json:"filter,omitempty"`
-}
-
-type Filter struct {
-	Type  string                 `json:"type"`
-	Value map[string]interface{} `json:"value"`
-}
 
 // 自定义访问者
 type CommandVisitor struct {
 	*generated.BasecmdParserVisitor
-	currentCommand    *CommandDefinition
-	currentSubCommand *Command
+	currentCommand    *schema.CommandDefinition
+	currentSubCommand *schema.Command
 	currentComment    string
 	comments          []string
+	typeDefinitions   map[string]*schema.TypeDefinition
 }
 
 func NewCommandVisitor() *CommandVisitor {
 	return &CommandVisitor{
 		BasecmdParserVisitor: &generated.BasecmdParserVisitor{},
-		currentCommand: &CommandDefinition{
-			Options:     make(map[string]*Option),
-			SubCommands: make(map[string]*Command),
-			Constraints: make([]*Constraint, 0),
+		currentCommand: &schema.CommandDefinition{
+			Options:     make(map[string]*schema.Option),
+			SubCommands: make(map[string]*schema.Command),
+			Constraints: make([]*schema.Constraint, 0),
 		},
-		comments: make([]string, 0),
+		comments:        make([]string, 0),
+		typeDefinitions: make(map[string]*schema.TypeDefinition),
 	}
 }
 
@@ -138,6 +89,8 @@ func (v *CommandVisitor) VisitStatement(ctx *generated.StatementContext) interfa
 			v.VisitComment(comment)
 		} else if cmdDecl, ok := child.(*generated.CommandDeclarationContext); ok {
 			v.VisitCommandDeclaration(cmdDecl)
+		} else if typeDecl, ok := child.(*generated.TypeDeclarationContext); ok {
+			v.VisitTypeDeclaration(typeDecl)
 		}
 	}
 	return nil
@@ -190,24 +143,23 @@ func (v *CommandVisitor) VisitCommandDeclaration(ctx *generated.CommandDeclarati
 	if v.currentCommand.Name == "" {
 		// 这是主命令
 		v.currentCommand.Name = cmdName
-		v.currentCommand.Comments = slices.Clone(v.comments)
+		v.currentCommand.Description = slices.Clone(v.comments)
 		// 添加命令声明前面的注释
-		v.currentCommand.Comments = append(v.currentCommand.Comments, cmdComments...)
+		v.currentCommand.Description = append(v.currentCommand.Description, cmdComments...)
 		fmt.Printf("DEBUG: Set main command: %s\n", cmdName)
 		v.currentSubCommand = nil   // 当前处理主命令
 		v.comments = v.comments[:0] // 清空注释
 	} else {
 		// 这是子命令
-		subCmd := &Command{
-			Name:        cmdName,
-			Comments:    slices.Clone(v.comments),
-			Options:     make(map[string]*Option),
-			SubCommands: make(map[string]*Command),
-			Constraints: make([]*Constraint, 0),
+		subCmd := &schema.Command{
+			Description: slices.Clone(v.comments),
+			Options:     make(map[string]*schema.Option),
+			SubCommands: make(map[string]*schema.Command),
+			Constraints: make([]*schema.Constraint, 0),
 		}
 
 		// 添加命令声明前面的注释
-		subCmd.Comments = append(subCmd.Comments, cmdComments...)
+		subCmd.Description = append(subCmd.Description, cmdComments...)
 
 		// 检查是否有extends
 		if len(ctx.AllIdentifier()) > 1 {
@@ -216,7 +168,7 @@ func (v *CommandVisitor) VisitCommandDeclaration(ctx *generated.CommandDeclarati
 
 		v.currentCommand.SubCommands[cmdName] = subCmd
 		v.currentSubCommand = subCmd // 设置当前子命令
-		fmt.Printf("DEBUG: Added sub command: %s with %d comments: %v\n", cmdName, len(subCmd.Comments), subCmd.Comments)
+		fmt.Printf("DEBUG: Added sub command: %s with %d comments: %v\n", cmdName, len(subCmd.Description), subCmd.Description)
 		v.comments = v.comments[:0] // 清空注释
 	}
 
@@ -299,11 +251,11 @@ func (v *CommandVisitor) VisitField(ctx *generated.FieldContext) interface{} {
 	}
 
 	// 创建选项
-	option := &Option{
+	option := &schema.Option{
 		Type:        fieldType,
 		Alias:       alias,
 		Description: description,
-		Decorators:  make([]*Decorator, 0),
+		Decorators:  make([]*schema.Decorator, 0),
 	}
 
 	// 检查类型是否为可选
@@ -351,8 +303,65 @@ func (v *CommandVisitor) VisitArrayType(ctx *generated.ArrayTypeContext) interfa
 	return nil
 }
 
-func (v *CommandVisitor) parseDecorator(ctx *generated.DecoratorContext) *Decorator {
-	decorator := &Decorator{
+func (v *CommandVisitor) VisitTypeDeclaration(ctx *generated.TypeDeclarationContext) interface{} {
+	// 收集类型声明前面的注释
+	typeComments := make([]string, 0)
+
+	// 遍历类型声明的所有子节点，收集注释
+	for _, child := range ctx.GetChildren() {
+		if commentCtx, ok := child.(*generated.CommentContext); ok {
+			v.VisitComment(commentCtx)
+		}
+	}
+
+	// 将当前收集的注释添加到类型注释中
+	typeComments = append(typeComments, v.comments...)
+
+	// 获取类型名称和类型定义
+	typeName := ctx.Identifier().GetText()
+	typeDef := ctx.Type_()
+
+	var typeString string
+	if typeDef.ArrayType() != nil {
+		// 数组类型
+		arrayType := typeDef.ArrayType()
+		baseType := arrayType.Identifier().GetText()
+		typeString = baseType + "[]"
+	} else if typeDef.MapType() != nil {
+		// Map类型
+		mapType := typeDef.MapType()
+		keyType := mapType.AllIdentifier()[0].GetText()
+		valueType := mapType.AllIdentifier()[1].GetText()
+		typeString = fmt.Sprintf("map<%s,%s>", keyType, valueType)
+	} else {
+		// 普通类型
+		typeString = typeDef.GetText()
+	}
+
+	// 移除可选标记
+	if strings.HasSuffix(typeString, "?") {
+		typeString = strings.TrimSuffix(typeString, "?")
+	}
+
+	fmt.Printf("DEBUG: Found type declaration: %s = %s with %d comments\n", typeName, typeString, len(typeComments))
+
+	// 创建类型定义
+	typeDefinition := &schema.TypeDefinition{
+		Type:        typeString,
+		Description: typeComments,
+		Properties:  make(map[string]interface{}),
+	}
+
+	// 存储类型定义
+	v.typeDefinitions[typeName] = typeDefinition
+
+	v.comments = v.comments[:0] // 清空注释
+
+	return nil
+}
+
+func (v *CommandVisitor) parseDecorator(ctx *generated.DecoratorContext) *schema.Decorator {
+	decorator := &schema.Decorator{
 		Name:   ctx.Identifier().GetText(),
 		Params: make(map[string]interface{}),
 	}
@@ -393,8 +402,12 @@ func (v *CommandVisitor) parseExpression(ctx generated.IExpressionContext) inter
 	return nil
 }
 
-func (v *CommandVisitor) GetResult() *CommandDefinition {
+func (v *CommandVisitor) GetResult() *schema.CommandDefinition {
 	return v.currentCommand
+}
+
+func (v *CommandVisitor) GetTypeDefinitions() map[string]*schema.TypeDefinition {
+	return v.typeDefinitions
 }
 
 // 树状打印函数
@@ -419,12 +432,12 @@ func (p *TreePrinter) indentWrite(s string) {
 	fmt.Fprint(p.output, s)
 }
 
-func printCommandDefinition(cmd *CommandDefinition) {
+func printCommandDefinition(cmd *schema.CommandDefinition) {
 	printer := NewTreePrinter(os.Stdout)
 	printer.printCommandDefinition(cmd)
 }
 
-func (p *TreePrinter) printCommandDefinition(cmd *CommandDefinition) {
+func (p *TreePrinter) printCommandDefinition(cmd *schema.CommandDefinition) {
 	p.write("*CommandDefinition {\n")
 	p.indent++
 
@@ -432,10 +445,10 @@ func (p *TreePrinter) printCommandDefinition(cmd *CommandDefinition) {
 		p.indentWrite(fmt.Sprintf("Name: %q\n", cmd.Name))
 	}
 
-	if len(cmd.Comments) > 0 {
+	if len(cmd.Description) > 0 {
 		p.indentWrite("Comments: [\n")
 		p.indent++
-		for i, comment := range cmd.Comments {
+		for i, comment := range cmd.Description {
 			p.indentWrite(fmt.Sprintf("%d: %q\n", i, comment))
 		}
 		p.indent--
@@ -498,11 +511,11 @@ func (p *TreePrinter) printCommandDefinition(cmd *CommandDefinition) {
 	p.indentWrite("}\n")
 }
 
-func (p *TreePrinter) printCommand(cmd *Command) {
-	if len(cmd.Comments) > 0 {
+func (p *TreePrinter) printCommand(cmd *schema.Command) {
+	if len(cmd.Description) > 0 {
 		p.indentWrite("Comments: [\n")
 		p.indent++
-		for i, comment := range cmd.Comments {
+		for i, comment := range cmd.Description {
 			p.indentWrite(fmt.Sprintf("%d: %q\n", i, comment))
 		}
 		p.indent--
@@ -562,7 +575,7 @@ func (p *TreePrinter) printCommand(cmd *Command) {
 	}
 }
 
-func (p *TreePrinter) printOption(option *Option) {
+func (p *TreePrinter) printOption(option *schema.Option) {
 	p.indentWrite(fmt.Sprintf("Type: %q\n", option.Type))
 	p.indentWrite(fmt.Sprintf("Required: %t\n", option.Required))
 
@@ -605,7 +618,7 @@ func (p *TreePrinter) printOption(option *Option) {
 	}
 }
 
-func (p *TreePrinter) printDecorator(decorator *Decorator) {
+func (p *TreePrinter) printDecorator(decorator *schema.Decorator) {
 	p.indentWrite(fmt.Sprintf("Name: %q\n", decorator.Name))
 
 	if len(decorator.Params) > 0 {
@@ -621,7 +634,7 @@ func (p *TreePrinter) printDecorator(decorator *Decorator) {
 	}
 }
 
-func (p *TreePrinter) printConstraint(constraint *Constraint) {
+func (p *TreePrinter) printConstraint(constraint *schema.Constraint) {
 	p.indentWrite(fmt.Sprintf("Type: %q\n", constraint.Type))
 	p.indentWrite(fmt.Sprintf("Expression: %q\n", constraint.Expression))
 
@@ -650,7 +663,7 @@ func (p *TreePrinter) printConstraint(constraint *Constraint) {
 	}
 }
 
-func (p *TreePrinter) printOperand(operand *Operand) {
+func (p *TreePrinter) printOperand(operand *schema.Operand) {
 	p.indentWrite(fmt.Sprintf("Type: %q\n", operand.Type))
 
 	if operand.Path != "" {
@@ -680,151 +693,9 @@ func (p *TreePrinter) printOperand(operand *Operand) {
 }
 
 // YAML输出函数
-func outputYAML(cmd *CommandDefinition, filename string) {
-	// 转换为YAML友好的结构
-	yamlData := map[string]interface{}{
-		"name": cmd.Name,
-	}
-
-	if len(cmd.Comments) > 0 {
-		yamlData["comments"] = cmd.Comments
-	}
-
-	if cmd.Extends != "" {
-		yamlData["extends"] = cmd.Extends
-	}
-
-	// 处理选项
-	if len(cmd.Options) > 0 {
-		options := make(map[string]interface{})
-		for name, option := range cmd.Options {
-			optData := map[string]interface{}{
-				"type":     option.Type,
-				"required": option.Required,
-			}
-
-			if option.Default != nil {
-				optData["default"] = option.Default
-			}
-
-			if len(option.Alias) > 0 {
-				optData["alias"] = option.Alias
-			}
-
-			if len(option.Description) > 0 {
-				optData["description"] = option.Description
-			}
-
-			if len(option.Decorators) > 0 {
-				decorators := make([]map[string]interface{}, 0)
-				for _, decorator := range option.Decorators {
-					decData := map[string]interface{}{
-						"name": decorator.Name,
-					}
-					if len(decorator.Params) > 0 {
-						decData["params"] = decorator.Params
-					}
-					decorators = append(decorators, decData)
-				}
-				optData["decorators"] = decorators
-			}
-
-			options[name] = optData
-		}
-		yamlData["options"] = options
-	}
-
-	// 处理子命令
-	if len(cmd.SubCommands) > 0 {
-		subCommands := make(map[string]interface{})
-		for name, subCmd := range cmd.SubCommands {
-			subCmdData := make(map[string]interface{})
-
-			if len(subCmd.Comments) > 0 {
-				subCmdData["comments"] = subCmd.Comments
-			}
-
-			if subCmd.Extends != "" {
-				subCmdData["extends"] = subCmd.Extends
-			}
-
-			// 处理子命令的选项
-			if len(subCmd.Options) > 0 {
-				subOptions := make(map[string]interface{})
-				for optName, option := range subCmd.Options {
-					optData := map[string]interface{}{
-						"type":     option.Type,
-						"required": option.Required,
-					}
-
-					if option.Default != nil {
-						optData["default"] = option.Default
-					}
-
-					if len(option.Alias) > 0 {
-						optData["alias"] = option.Alias
-					}
-
-					if len(option.Description) > 0 {
-						optData["description"] = option.Description
-					}
-
-					if len(option.Decorators) > 0 {
-						decorators := make([]map[string]interface{}, 0)
-						for _, decorator := range option.Decorators {
-							decData := map[string]interface{}{
-								"name": decorator.Name,
-							}
-							if len(decorator.Params) > 0 {
-								decData["params"] = decorator.Params
-							}
-							decorators = append(decorators, decData)
-						}
-						optData["decorators"] = decorators
-					}
-
-					subOptions[optName] = optData
-				}
-				subCmdData["options"] = subOptions
-			}
-
-			subCommands[name] = subCmdData
-		}
-		yamlData["sub_commands"] = subCommands
-	}
-
-	// 处理约束
-	if len(cmd.Constraints) > 0 {
-		constraints := make([]map[string]interface{}, 0)
-		for _, constraint := range cmd.Constraints {
-			constraintData := map[string]interface{}{
-				"type":       constraint.Type,
-				"expression": constraint.Expression,
-			}
-
-			if constraint.Message != "" {
-				constraintData["message"] = constraint.Message
-			}
-
-			if constraint.Operator != "" {
-				constraintData["operator"] = constraint.Operator
-			}
-
-			if constraint.LeftOperand != nil {
-				constraintData["left_operand"] = constraint.LeftOperand
-			}
-
-			if constraint.RightOperand != nil {
-				constraintData["right_operand"] = constraint.RightOperand
-			}
-
-			constraints = append(constraints, constraintData)
-		}
-		yamlData["constraints"] = constraints
-	}
-
-	// 序列化为YAML
-	yamlBytes, err := yaml.Marshal(yamlData)
+func outputYAML(schema *schema.Schema, filename string) {
+	// 直接序列化结构体
+	yamlBytes, err := yaml.Marshal(schema)
 	if err != nil {
 		log.Printf("Error marshaling YAML: %v", err)
 		return
@@ -864,14 +735,27 @@ func main() {
 	tree.Accept(visitor)
 
 	cmdDef := visitor.GetResult()
+	typeDefs := visitor.GetTypeDefinitions()
 
 	printCommandDefinition(cmdDef)
+
+	schema := &schema.Schema{
+		Version:     "0.1.0",
+		Vendor:      "opencommand",
+		Name:        cmdDef.Name,
+		Description: cmdDef.Description,
+		Options:     cmdDef.Options,
+		SubCommands: cmdDef.SubCommands,
+		Constraints: cmdDef.Constraints,
+		Extends:     cmdDef.Extends,
+		Definitions: typeDefs,
+	}
 
 	if strings.HasSuffix(inputFilename, ".hl") {
 		baseName := strings.TrimSuffix(inputFilename, ".hl")
 		yamlFilename := baseName + ".schema.yaml"
-		outputYAML(cmdDef, yamlFilename)
+		outputYAML(schema, yamlFilename)
 	} else {
-		outputYAML(cmdDef, "output.schema.yaml")
+		outputYAML(schema, "output.schema.yaml")
 	}
 }

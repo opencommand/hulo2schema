@@ -52,6 +52,8 @@ NEQ        : '≠';
 
 EXTENDS: 'extends';
 
+TYPE: 'type';
+
 OPTS : 'opts';
 CMDS : 'cmds';
 

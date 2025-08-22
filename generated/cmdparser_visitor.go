@@ -45,4 +45,7 @@ type cmdParserVisitor interface {
 
 	// Visit a parse tree produced by cmdParser#arrayType.
 	VisitArrayType(ctx *ArrayTypeContext) interface{}
+
+	// Visit a parse tree produced by cmdParser#typeDeclaration.
+	VisitTypeDeclaration(ctx *TypeDeclarationContext) interface{}
 }

@@ -17,7 +17,7 @@ block: LBRACE (statement SEMI*)* RBRACE;
 
 comment: LineComment | BlockComment;
 
-statement: comment | commandDeclaration;
+statement: comment | commandDeclaration | typeDeclaration;
 
 decorator: AT Identifier (LPAREN expressionList? RPAREN)?;
 
@@ -36,3 +36,5 @@ type: (Identifier | mapType | arrayType) QUEST?;
 mapType: MAP LT Identifier (COMMA Identifier)* GT;
 
 arrayType: Identifier LBRACK RBRACK;
+
+typeDeclaration: TYPE Identifier ASSIGN type;

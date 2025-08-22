@@ -58,3 +58,7 @@ func (v *BasecmdParserVisitor) VisitMapType(ctx *MapTypeContext) interface{} {
 func (v *BasecmdParserVisitor) VisitArrayType(ctx *ArrayTypeContext) interface{} {
 	return v.VisitChildren(ctx)
 }
+
+func (v *BasecmdParserVisitor) VisitTypeDeclaration(ctx *TypeDeclarationContext) interface{} {
+	return v.VisitChildren(ctx)
+}
